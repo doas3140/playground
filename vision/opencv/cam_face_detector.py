@@ -7,8 +7,8 @@ import time
 import cv2
 
 args = {}
-args["prototxt"] = "./utils/deploy.prototxt.txt"
-args["model"] = "./utils/res10_300x300_ssd_iter_140000.caffemodel"
+args["prototxt"] = "./utils/face_model/deploy.prototxt.txt"
+args["model"] = "./utils/face_model/res10_300x300_ssd_iter_140000.caffemodel"
 args["confidence"] = 0.5
 
 print("[INFO] loading model...")
