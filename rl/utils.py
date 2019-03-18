@@ -1,4 +1,5 @@
 import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import pickle
 import sys
 import tensorflow as tf
@@ -10,7 +11,7 @@ import numpy as np
 import cv2
 import pandas as pd
 import time
-from tqdm import tqdm_notebook as tqdm
+from tqdm.autonotebook import tqdm
 from collections import deque
 import random
 from collections import defaultdict
