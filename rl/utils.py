@@ -4,6 +4,7 @@ import sys
 import tensorflow as tf
 import matplotlib.pyplot as plt
 import seaborn as sns
+sns.set_style("dark")
 import gym
 import numpy as np
 import cv2
@@ -13,6 +14,8 @@ from tqdm import tqdm_notebook as tqdm
 from collections import deque
 import random
 from collections import defaultdict
+import multiprocessing as mp
+
 
 
 def one_hot(arr,C):
@@ -25,13 +28,24 @@ def np_map(fn, list_):
 	return np.array(list(map(fn, list_)), dtype=np.float32)
 
 
-def discount_rewards(R, y=0.99, normalize=True):
+def discount_rewards(R, y=0.99, normalize=False):
 	''' [n] -> [n] w/ discounted rewards '''
 	G = np.zeros_like(R)
 	for t in range(len(R)-1,-1,-1):
 		G[t] = R[t] + y*G[t+1] if t+1 < len(R) else R[t]
 	return (G - G.mean() ) / G.std() if normalize else G
 
+
+def epsilon_greedy(q, epsilon): # [1,A], []
+    ''' q values [1,A] -> [] action '''
+    if q.ndim == 1: q = q[None,:]
+    if np.random.rand() < epsilon: return np.random.choice(q.shape[1])
+    else: return np.squeeze(np.argmax(q, axis=-1))
+
+
+def create_bins(max_len, bin_size):
+    ''' returns int2int = [0,1,2,3,4,...] -> [0,0,2,2,4,4,...] '''
+    return [ a for a in range(max_len//bin_size) for b in range(bin_size) ]
 
 '''
 CLASSES
@@ -52,8 +66,9 @@ class RandomAgent():
 
 
 class Experiment():
-	def __init__(self, env, agent, use_tqdm=True):
+	def __init__(self, env, agent, use_tqdm=True, seed=np.random.randint(1000)):
 		self.env = env
+		self.env.seed(seed)
 		self.agent = agent
 		self.train_steps = 250000
 		self.eval_steps = 125000
@@ -66,14 +81,16 @@ class Experiment():
 	def run(self, iters, steps_in_one_iter=250000, name='experiment', run_number=1.0): # used like in atari baselines
 		''' 1 iter = run as many episodes till total_steps == steps_in_one_iter '''
 		T = tqdm(range(iters)) if self.tqdm else range(iters)
+		t0 = time.time()
 		for _ in T:
 			d = self._run_one_phase(max_steps=steps_in_one_iter) # returns self.E averaged across episodes
 			self.D['run_number'].append(float(run_number))
 			self.D['iteration'].append(float(self.iter))
 			self.D['train_episode_returns'].append(float(d['reward/e'])) # reward per episode
 			self.D['agent'].append(name)
+			self.D['time'].append(float(time.time()-t0))
 			if self.tqdm:
-				T.set_description('{:>4d}/{:>4d}) r={:>5.1f} steps={:5.1f}'.format(self.iter, iters, d['reward/e'], d['total_steps/e']))
+				T.set_description('{:>4d}/{:>4d}) r={:>5.1f} steps={:5.1f}'.format(self.iter, iters, d['reward/e'], d['steps/e']))
 			for k,v in d.items():
 				self.D[k].append(v)
 			self.iter += 1
@@ -85,18 +102,18 @@ class Experiment():
 		if self.tqdm and isinstance(self.env, AtariPreprocessing) and max_steps > 100 or max_steps > 20000:
 			T = tqdm(total=max_steps)
 		self.E = defaultdict(int) # save all printable vars in here (default value = 0)
-		while self.E['total_steps'] < max_steps:
+		while self.E['steps'] < max_steps:
 			steps = self._run_one_episode(self.max_steps_in_episode) # total reward here
 			num_episodes += 1
 			if self.tqdm and isinstance(self.env, AtariPreprocessing) and max_steps > 100 or max_steps > 20000:
 				T.update(steps)
 				s = 'steps) {:>5.1f};'.format(steps)
-				D = []; [D.extend([a,b/self.E['total_steps']]) for a,b in self.E.items() if a != 'total_steps']
+				D = []; [D.extend([a,b/self.E['steps']]) for a,b in self.E.items() if a != 'steps']
 				T.set_description(s + ''.join([' {}) {:>5.1f};' for _ in len(self.E)]).format(D))
 		d = {}
 		for a,b in self.E.items():
 			d[a+'/e'] = b/num_episodes
-			d[a+'/s'] = b/num_episodes/self.E['total_steps']
+			d[a+'/s'] = b/num_episodes/self.E['steps']
 		del self.E; return d
 	
 
@@ -122,7 +139,7 @@ class Experiment():
 				obs, r, done, _ = self.env.step(self.env.action_space.sample())
 				if done: raise(Exception('WTFF'))
 				obs = self.agent_state_preprocessing_fn(obs)
-				self.E['total_steps'] += 1
+				self.E['steps'] += 1
 			a = self.agent.first_step(obs, self.E)
 		else:
 			if isinstance(self.env.observation_space, gym.spaces.discrete.Discrete):
@@ -132,7 +149,7 @@ class Experiment():
 			init_obs = self.env.reset()
 			init_obs = self.agent_state_preprocessing_fn(init_obs) # add batch shape
 			a = self.agent.first_step(init_obs, self.E)
-			self.E['total_steps'] += 1
+			self.E['steps'] += 1
 		done = False
 		while True:
 			if mode == 'watch':
@@ -143,12 +160,12 @@ class Experiment():
 			obs = self.agent_state_preprocessing_fn(obs)
 			r = np.clip(r, -1, 1)
 			self.E['reward'] += r
-			self.E['total_steps'] += 1
+			self.E['steps'] += 1
 			total_steps += 1
 			if total_steps > max_steps or done: break
 			else: a = self.agent.step(r, obs, self.E)
 		self.agent.last_step(r, self.E)
-		self.E['total_steps'] += 1
+		self.E['steps'] += 1
 		if mode == 'watch':
 			if isinstance(self.env, AtariPreprocessing):
 				self.env.environment.close()
@@ -196,12 +213,12 @@ def test_agent_on_simple_games(create_agent_fn, name, game_dict=SIMPLE_GAMES):
 	for game, max_iters in tqdm(game_dict.items(), total=len(game_dict)):
 		df = pd.DataFrame()
 		for run in tqdm(range(5), leave=True):
-			env = gym.make(game)
+			create_env_fn = lambda: gym.make(game)
+			env = create_env_fn()
 			if isinstance(env.observation_space, gym.spaces.box.Box):
 				S, A = env.observation_space.shape[0], env.action_space.n
-			else:
-				S, A = env.observation_space.n, env.action_space.n
-			exp = Experiment(env, create_agent_fn(S,A), use_tqdm=False)
+			else: S, A = env.observation_space.n, env.action_space.n
+			exp = Experiment(env, create_agent_fn(S,A,create_env_fn), use_tqdm=False, seed=run)
 			df2 = exp.run(iters=max_iters, steps_in_one_iter=1, name=name, run_number=run)
 			df = df.append(df2)
 		save_my_benchmark(df, game, name)
@@ -231,45 +248,31 @@ def load_my_benchmark(game_name, agent_name=None, base_dir='./benchmarks'):
 def load_atari_benchmark(game_name):
 	return load_baselines()[game_name]
 
-def plot_df(df, y='train_episode_returns', confidence=68, yname=''):
+def plot_df(df, x='iteration', y='train_episode_returns', confidence=68, yname='', rolling_mean=None, bins=None):
 	# yname is used as y axis name when y is list
 	if isinstance(y, list):
-		out = pd.DataFrame()
-		for i,col in enumerate(y):
-			d = df[ [col, 'iteration'] ]
+		dnew = pd.DataFrame()
+		for col in y:
+			d = df[ [col, x] ]
 			d.rename(columns={col:yname}, inplace=True)
 			d.insert(0, 'agent', col) # add additional col w/ name
-			out = out.append(d)
-		return sns.lineplot(x='iteration', y=yname, hue='agent', ci=confidence, data=out)
+			dnew = dnew.append(d)
+		y, df = yname, dnew
 	else:
-		return sns.lineplot(x='iteration', y=y, hue='agent', ci=confidence, data=df)
+		pass
+	if rolling_mean is not None:
+		out = df.copy()
+		out[y] = out[y].rolling(rolling_mean).mean()
+	else:
+		out = df
+	if bins is not None:
+		if isinstance(bins, int):
+			bins = create_bins(int(out[x].max())+1, bins) # create list out of delta bins
+		out[x] = out[x].apply(lambda z: bins[int(z)])
+	return sns.lineplot(x=x, y=y, hue='agent', ci=confidence, data=out)
 
 
-# # DEPRICATED
-# def create_new_reward_df(rewards, name='experiment'): # rewards.shape = (num_runs,num_iters) [num_runs can be just 1]
-# 	d = {'run_number':[], 'iteration': [], 'train_episode_returns': [], 'agent': []}
-# 	for run_nr, rewards_arr in enumerate(rewards):
-# 		for i, r in enumerate(rewards_arr):
-# 			d['iteration'].append(i)
-# 			d['run_number'].append(run_nr+1)
-# 			d['train_episode_returns'].append(r)
-# 			d['agent'].append(name)
-# 	return pd.DataFrame(data=d)
 
-
-# # DEPRICATED
-# def plot_results(rewards, game_name='Pong', name='experiment', baselines=True):
-# 	# rewards.shape = (num_runs,num_iters) [num_runs can be just 1]
-# 	df = create_new_reward_df(rewards, name)
-# 	if baselines:
-# 		b = load_baselines()
-# 		df_b = b[game_name]
-# 		df = df_b.append(df)
-# 	fig, ax = plt.subplots(figsize=(16,8))
-# 	sns.set_style("dark")
-# 	sns.tsplot( data=df, time='iteration', unit='run_number', condition='agent', value='train_episode_returns', ax=ax )
-# 	plt.title(game_name)
-# 	return plt.show()
 
 
 def load_baselines(base_dir='./benchmarks', verbose=False):
@@ -362,8 +365,7 @@ class AtariPreprocessing(object):
 	Evaluation Protocols and Open Problems for General Agents".
 	"""
 
-	def __init__(self, environment, frame_skip=4, terminal_on_life_loss=False,
-			   screen_size=84):
+	def __init__(self, environment, frame_skip=4, terminal_on_life_loss=False, screen_size=84):
 		"""Constructor for an Atari 2600 preprocessor.
 
 		Args:
