@@ -44,6 +44,17 @@ def epsilon_greedy(q, epsilon): # [1,A], []
     else: return np.squeeze(np.argmax(q, axis=-1))
 
 
+def create_epsilon_fn(args):
+	def get_epsilon_fn(t, min_e=0.01): # step
+		for from_e, to_e, from_t, to_t in args:
+			if t > from_t and t < to_t:
+				# linear change from_t -> to_t, where eps changes like from_e -> to_e
+				return max(to_e + (from_e-to_e)*(t-to_t)/(from_t-to_t), min_e)
+		return 1.0
+	return get_epsilon_fn
+
+
+
 def create_bins(max_len, bin_size):
     ''' returns int2int = [0,1,2,3,4,...] -> [0,0,2,2,4,4,...] '''
     return [ a for a in range(max_len//bin_size) for b in range(bin_size) ]
@@ -77,6 +88,13 @@ class Experiment():
 		self.iter = 0
 		self.tqdm = use_tqdm
 		self.D = defaultdict(list) # dict for each iter
+		self._init_env()
+
+	def _init_env(self):
+		if isinstance(self.env.observation_space, gym.spaces.discrete.Discrete):
+			self.agent_state_preprocessing_fn = lambda s: one_hot([s],C=self.env.observation_space.n)
+		else:
+			self.agent_state_preprocessing_fn = lambda s: np.expand_dims(s, 0)
 	
 	
 	def run(self, iters, steps_in_one_iter=250000, name='experiment', run_number=1.0): # used like in atari baselines
@@ -91,7 +109,7 @@ class Experiment():
 			self.D['agent'].append(name)
 			self.D['time'].append(float(time.time()-t0))
 			if self.tqdm:
-				T.set_description('{:>4d}/{:>4d}) r={:>5.1f} steps={:5.1f}'.format(self.iter, iters, d['reward/e'], d['steps/e']))
+				T.set_description('{}|{:>4d}/{:>4d}) r={:>5.1f} steps={:5.1f}'.format(run_number, self.iter, iters, d['reward/e'], d['steps/e']))
 			for k,v in d.items():
 				self.D[k].append(v)
 			self.iter += 1
@@ -143,10 +161,6 @@ class Experiment():
 				self.E['steps'] += 1
 			a = self.agent.first_step(obs, self.E)
 		else:
-			if isinstance(self.env.observation_space, gym.spaces.discrete.Discrete):
-				self.agent_state_preprocessing_fn = lambda s: one_hot([s],C=self.env.observation_space.n)
-			else:
-				self.agent_state_preprocessing_fn = lambda s: np.expand_dims(s, 0)
 			init_obs = self.env.reset()
 			init_obs = self.agent_state_preprocessing_fn(init_obs) # add batch shape
 			a = self.agent.first_step(init_obs, self.E)
@@ -176,6 +190,7 @@ class Experiment():
 
 
 	def show_play(self, steps=100, delta_time=1/24): # 24 fps
+		self.E = defaultdict(int)
 		return self._run_one_episode(steps, 'watch', delta_time)
 		
 	

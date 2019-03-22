@@ -103,14 +103,15 @@ class MasterAgent():
             self.optimizer.apply_gradients(zip(grads, self.nn.trainable_variables))
         
 
-agent_fn = lambda S,A,env_fn: MasterAgent(S, A, env_fn, lr=1e-3, num_cores=os.cpu_count())
+agent_fn = lambda S,A,env_fn: MasterAgent(S, A, env_fn, lr=1e-4, num_cores=os.cpu_count())
 
 
 if __name__ == '__main__':
-    GAME = 'CartPole-v1'
+    GAME = 'Pong-ram-v0'
     env_fn = lambda: gym.make(GAME)
     env = env_fn()
     S, A = env.observation_space.shape[0], env.action_space.n
     exp = Experiment(env, agent_fn(S,A,env_fn))
+    exp.agent_state_preprocessing_fn = lambda s: s[None,:] / 256
     df = exp.run(100, 1, name='')
 
