@@ -18,6 +18,25 @@ from collections import defaultdict
 import multiprocessing as mp
 
 
+def pick_action_values(values, actions):
+    ''' 2D case: [b,a], [b] -> [b] or
+        3D case: [b,N,a], [b] -> [b,N] '''
+    if len(values.shape) == 2:
+        b,N = values.shape
+        b_idx = tf.range(b)[:,None] # [b,1]
+        a_idx = actions[:,None] # [b,1]
+        idxes = tf.concat([b_idx,a_idx], axis=1) # [b,2]
+        out = tf.gather_nd(values, idxes) # [b]
+    elif len(values.shape) == 3:
+        b,N,a = values.shape
+        b_idx = np.repeat(range(b), N)[:,None] # [b x N,1] []
+        N_idx = np.tile(range(N), b)[:,None] # [b x N,1]
+        a_idx = np.repeat(actions, N)[:,None] # [b x N,1]
+        idxes = tf.concat([b_idx,N_idx,a_idx], axis=1) # [b,3]
+        out = tf.gather_nd(values, idxes) # [b x N]
+        out = tf.reshape(out, [b,N]) # [b,N]
+    return out
+
 
 def one_hot(arr,C):
 	''' NUMPY arr w/ shape [n] -> [n,C], where n - # of elements '''
@@ -44,13 +63,14 @@ def epsilon_greedy(q, epsilon): # [1,A], []
     else: return np.squeeze(np.argmax(q, axis=-1))
 
 
-def create_epsilon_fn(args):
-	def get_epsilon_fn(t, min_e=0.01): # step
-		for from_e, to_e, from_t, to_t in args:
+def create_epsilon_fn(args, min_e=0.01):
+	def get_epsilon_fn(t, from_t=0.0): # step
+		for from_e, to_e, to_t in args:
 			if t > from_t and t < to_t:
 				# linear change from_t -> to_t, where eps changes like from_e -> to_e
 				return max(to_e + (from_e-to_e)*(t-to_t)/(from_t-to_t), min_e)
-		return 1.0
+			from_t = to_t
+		return min_e
 	return get_epsilon_fn
 
 
@@ -94,7 +114,7 @@ class Experiment():
 		if isinstance(self.env.observation_space, gym.spaces.discrete.Discrete):
 			self.agent_state_preprocessing_fn = lambda s: one_hot([s],C=self.env.observation_space.n)
 		else:
-			self.agent_state_preprocessing_fn = lambda s: np.expand_dims(s, 0)
+			self.agent_state_preprocessing_fn = lambda s: s.astype(np.float32) # [S]
 	
 	
 	def run(self, iters, steps_in_one_iter=250000, name='experiment', run_number=1.0): # used like in atari baselines
@@ -118,21 +138,23 @@ class Experiment():
 	
 	def _run_one_phase(self, max_steps):
 		num_episodes = 0
-		if self.tqdm and isinstance(self.env, AtariPreprocessing) and max_steps > 100 or max_steps > 20000:
+		use_tqdm = self.tqdm and isinstance(self.env, AtariPreprocessing) and max_steps > 100 or max_steps > 100000
+		if use_tqdm:
 			T = tqdm(total=max_steps)
 		self.E = defaultdict(int) # save all printable vars in here (default value = 0)
 		while self.E['steps'] < max_steps:
 			steps = self._run_one_episode(self.max_steps_in_episode) # total reward here
 			num_episodes += 1
-			if self.tqdm and isinstance(self.env, AtariPreprocessing) and max_steps > 100 or max_steps > 20000:
+			if use_tqdm:
 				T.update(steps)
 				s = 'steps) {:>5.1f};'.format(steps)
-				D = []; [D.extend([a,b/self.E['steps']]) for a,b in self.E.items() if a != 'steps']
-				T.set_description(s + ''.join([' {}) {:>5.1f};' for _ in len(self.E)]).format(D))
+				# D = []; [D.extend([a,b/self.E['steps']]) for a,b in self.E.items() if a != 'steps']
+				# T.set_description(s + ''.join([' {}) {:>5.1f};' for _ in self.E]).format(D))
+				T.set_description(f"r: {self.E['reward']}; steps: {self.E['steps']}")
 		d = {}
 		for a,b in self.E.items():
 			d[a+'/e'] = b/num_episodes
-			d[a+'/s'] = b/num_episodes/self.E['steps']
+			d[a+'/s'] = b/self.E['steps']
 		del self.E; return d
 	
 
@@ -158,13 +180,12 @@ class Experiment():
 				obs, r, done, _ = self.env.step(self.env.action_space.sample())
 				if done: raise(Exception('WTFF'))
 				obs = self.agent_state_preprocessing_fn(obs)
-				self.E['steps'] += 1
 			a = self.agent.first_step(obs, self.E)
 		else:
 			init_obs = self.env.reset()
 			init_obs = self.agent_state_preprocessing_fn(init_obs) # add batch shape
 			a = self.agent.first_step(init_obs, self.E)
-			self.E['steps'] += 1
+		self.E['steps'] += 1
 		done = False
 		while True:
 			if mode == 'watch':

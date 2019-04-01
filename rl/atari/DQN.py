@@ -1,14 +1,6 @@
 
 from utils import *
 
-def run_agent(GAME, name, run_number):
-    env = gym.make(GAME)
-    S, A = env.observation_space.shape[0], env.action_space.n
-    agent = agent_fn(S,A)
-    exp = Experiment(env, agent)
-    exp.agent_state_preprocessing_fn = lambda s: s[None,:] / 256.
-    df = exp.run(1000, 1, name=name, run_number=run_number)
-    return df
 
 class Model(tf.keras.Model):
     def __init__(self, S, A):
@@ -25,7 +17,7 @@ class Model(tf.keras.Model):
     
 create_nn = lambda S,A: Model(S,A)
 
-class DQNAgent():
+class Agent():
     def __init__(self, num_states, num_actions, lr=1e-4, gamma=0.99):
         self.S, self.A = num_states, num_actions
         self.optimizer = tf.optimizers.Adam(lr)
@@ -39,12 +31,12 @@ class DQNAgent():
         self._step = 1 # step count to construct epsilon and swap networks
         self.D = deque(maxlen=100000) # experience replay buffer
         self.step2epsilon = create_epsilon_fn([
-            # from_e, to_e, from_t, to_t (linear change)
-            [1.0, 0.5, 0.0, 5e5],
-            [0.5, 0.2, 5e5, 1e6],
-            [0.2, 0.1, 1e6, 2e6],
-            [0.1, 0.0, 2e6, 4e6]
-        ])
+            # from_e, to_e, in_steps (linear change)
+            [1.0, 0.5, 5e5],
+            [0.5, 0.2, 1e6],
+            [0.2, 0.1, 2e6],
+            [0.1, 0.0, 4e6]
+        ], min_e=0.01)
         
     def first_step(self, s, sdict): # [1,S]
         a = np.random.randint(self.A) # [] (random move)
@@ -63,7 +55,7 @@ class DQNAgent():
         if self._step % 2 == 0: # ecery second frame update loss
             if len(self.D) < self.batch_size: loss = 0
             else: loss = self.update_weights(self.batch_size, sdict)
-            sdict['loss'] += float(loss)
+            sdict['loss'] += float(loss) * 2
         # copy Q network to T network
         if self._step % self.swap_iters == 0:
             self.Tnn.set_weights( self.Qnn.get_weights() )
@@ -109,17 +101,4 @@ class DQNAgent():
     def last_step(self, r, sdict):
         self.D.append([self.s, self.a, r, self.s, True]) # s, a, r, s', done
 
-agent_fn = lambda S,A,env_fn=None: DQNAgent(num_states=S, num_actions=A)
-
-if __name__ == '__main__':
-    GAME = 'Pong-ram-v4'
-    name = 'DQN'
-    num_runs = os.cpu_count()
-    args = [(GAME, name, i) for i in range(num_runs)]
-    pool = mp.Pool()
-    dfs = pool.starmap(run_agent, args)
-    df = pd.DataFrame({})
-    for d in dfs:
-        df = df.append(d)
-    save_my_benchmark(df, GAME, name)
-    
+agent_fn = lambda S,A,env_fn=None: Agent(num_states=S, num_actions=A)
