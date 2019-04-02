@@ -19,23 +19,23 @@ import multiprocessing as mp
 
 
 def pick_action_values(values, actions):
-    ''' 2D case: [b,a], [b] -> [b] or
-        3D case: [b,N,a], [b] -> [b,N] '''
-    if len(values.shape) == 2:
-        b,N = values.shape
-        b_idx = tf.range(b)[:,None] # [b,1]
-        a_idx = actions[:,None] # [b,1]
-        idxes = tf.concat([b_idx,a_idx], axis=1) # [b,2]
-        out = tf.gather_nd(values, idxes) # [b]
-    elif len(values.shape) == 3:
-        b,N,a = values.shape
-        b_idx = np.repeat(range(b), N)[:,None] # [b x N,1] []
-        N_idx = np.tile(range(N), b)[:,None] # [b x N,1]
-        a_idx = np.repeat(actions, N)[:,None] # [b x N,1]
-        idxes = tf.concat([b_idx,N_idx,a_idx], axis=1) # [b,3]
-        out = tf.gather_nd(values, idxes) # [b x N]
-        out = tf.reshape(out, [b,N]) # [b,N]
-    return out
+	''' 2D case: [b,a], [b] -> [b] or
+		3D case: [b,N,a], [b] -> [b,N] '''
+	if len(values.shape) == 2:
+		b,N = values.shape
+		b_idx = tf.range(b)[:,None] # [b,1]
+		a_idx = actions[:,None] # [b,1]
+		idxes = tf.concat([b_idx,a_idx], axis=1) # [b,2]
+		out = tf.gather_nd(values, idxes) # [b]
+	elif len(values.shape) == 3:
+		b,N,a = values.shape
+		b_idx = np.repeat(range(b), N)[:,None] # [b x N,1] []
+		N_idx = np.tile(range(N), b)[:,None] # [b x N,1]
+		a_idx = np.repeat(actions, N)[:,None] # [b x N,1]
+		idxes = tf.concat([b_idx,N_idx,a_idx], axis=1) # [b,3]
+		out = tf.gather_nd(values, idxes) # [b x N]
+		out = tf.reshape(out, [b,N]) # [b,N]
+	return out
 
 
 def one_hot(arr,C):
@@ -57,10 +57,10 @@ def discount_rewards(R, y=0.99, normalize=False):
 
 
 def epsilon_greedy(q, epsilon): # [1,A], []
-    ''' q values [1,A] -> [] action '''
-    if q.ndim == 1: q = q[None,:]
-    if np.random.rand() < epsilon: return np.random.choice(q.shape[1])
-    else: return np.squeeze(np.argmax(q, axis=-1))
+	''' q values [1,A] -> [] action '''
+	if q.ndim == 1: q = q[None,:]
+	if np.random.rand() < epsilon: return np.random.choice(q.shape[1])
+	else: return np.squeeze(np.argmax(q, axis=-1))
 
 
 def create_epsilon_fn(args, min_e=0.01):
@@ -76,8 +76,23 @@ def create_epsilon_fn(args, min_e=0.01):
 
 
 def create_bins(max_len, bin_size):
-    ''' returns int2int = [0,1,2,3,4,...] -> [0,0,2,2,4,4,...] '''
-    return [ a for a in range(max_len//bin_size) for b in range(bin_size) ]
+	''' returns int2int = [0,1,2,3,4,...] -> [0,0,2,2,4,4,...] '''
+	return [ a for a in range(max_len//bin_size) for b in range(bin_size) ]
+
+
+def sample_sequences(buffer, samples=32, seq_len=1, shapes=[(), (), (), (), ()], padding=0):
+	''' buffer w/ element (s,a,r,s,done),shapes of elements in buffer (s,a,r,s,done) '''
+	idxes = np.random.choice(len(buffer), size=[samples], replace=False)
+	out = []
+	for j,shape in enumerate(shapes):
+		o = np.full((samples,seq_len) + shape, padding, dtype=np.float32)
+		for ii,i in enumerate(idxes):
+			for z in range(seq_len):
+				if i+z < len(buffer):
+					o[ii,z] = buffer[i+z][j]
+		out.append(o)
+	return out
+
 
 '''
 CLASSES
