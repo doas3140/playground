@@ -22,7 +22,7 @@ def pick_action_values(values, actions):
 	''' 2D case: [b,a], [b] -> [b] or
 		3D case: [b,N,a], [b] -> [b,N] '''
 	if len(values.shape) == 2:
-		b,N = values.shape
+		b,a = values.shape
 		b_idx = tf.range(b)[:,None] # [b,1]
 		a_idx = actions[:,None] # [b,1]
 		idxes = tf.concat([b_idx,a_idx], axis=1) # [b,2]
