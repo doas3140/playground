@@ -206,7 +206,7 @@ class Experiment():
 			if mode == 'watch':
 				self.env.render('human')
 				time.sleep(delta_time)
-			a = a if isinstance(a, int) else int(np.squeeze(a)) # if a is list of one elem then it is valid
+			a = a if isinstance(a, int) or isinstance(a, list) else int(np.squeeze(a)) # if a is list of one elem then it is valid
 			obs, r, done, _ = self.env.step(a)
 			obs = self.agent_state_preprocessing_fn(obs)
 			r = np.clip(r, -1, 1)
